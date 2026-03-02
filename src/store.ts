@@ -39,18 +39,73 @@ export function blankTeam(seed: number, conferenceId: string): TournamentTeam {
 function initTournaments(): Record<string, ConferenceTournament> {
   const tournaments: Record<string, ConferenceTournament> = {};
   for (const conf of CONFERENCES) {
+    const bracketType = conf.bracketType ?? 'standard';
     tournaments[conf.id] = {
       id: conf.id,
       name: conf.name,
       teams: Array.from({ length: conf.teamCount }, (_, i) =>
         blankTeam(i + 1, conf.id),
       ),
-      bracket: generateBracket(conf.teamCount),
+      bracket: generateBracket(conf.teamCount, bracketType, conf.reseedBeforeRounds),
+      bracketType,
       status: 'upcoming',
       startDate: conf.startDate,
     };
   }
   return tournaments;
+}
+
+/**
+ * Reconcile persisted tournaments with current conference metadata.
+ * If a conference's teamCount or bracketType changed, rebuild the bracket
+ * and resize the team array while preserving any existing team data that
+ * still fits.
+ */
+function reconcileTournaments(
+  stored: Record<string, ConferenceTournament>,
+): Record<string, ConferenceTournament> {
+  const fresh = initTournaments();
+  const result: Record<string, ConferenceTournament> = {};
+
+  for (const conf of CONFERENCES) {
+    const saved = stored[conf.id];
+    if (!saved) {
+      // New conference — use fresh default
+      result[conf.id] = fresh[conf.id];
+      continue;
+    }
+
+    const bracketType = conf.bracketType ?? 'standard';
+    const savedBracketType = saved.bracketType ?? 'standard';
+    const teamCountChanged = saved.teams.length !== conf.teamCount;
+    const bracketTypeChanged = savedBracketType !== bracketType;
+    const reseedChanged = JSON.stringify(saved.bracket.reseedBeforeRounds ?? []) !==
+                          JSON.stringify(conf.reseedBeforeRounds ?? []);
+
+    if (!teamCountChanged && !bracketTypeChanged && !reseedChanged) {
+      // No structural changes — keep saved data, update metadata
+      result[conf.id] = { ...saved, startDate: conf.startDate, name: conf.name, bracketType };
+      continue;
+    }
+
+    // Structural change — rebuild bracket, resize team array
+    const teams: TournamentTeam[] = Array.from({ length: conf.teamCount }, (_, i) => {
+      const seed = i + 1;
+      const existing = saved.teams.find((t) => t.seed === seed);
+      return existing ?? blankTeam(seed, conf.id);
+    });
+
+    result[conf.id] = {
+      ...saved,
+      name: conf.name,
+      startDate: conf.startDate,
+      teams,
+      bracket: generateBracket(conf.teamCount, bracketType, conf.reseedBeforeRounds),
+      bracketType,
+    };
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,7 +371,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'cbb-tourney-predictor',
-      version: 3,
+      version: 5,
       partialize: (state) => ({
         tournaments: state.tournaments,
         simResults: state.simResults,
@@ -339,6 +394,16 @@ export const useAppStore = create<AppState>()(
         ownershipConfig: { ...DEFAULT_OWNERSHIP_CONFIG },
         ownershipOverrides: {},
       }),
+      merge: (persisted, current) => {
+        const merged = { ...current, ...(persisted as object) };
+        // Reconcile tournaments with current conference metadata on every hydration
+        if (merged.tournaments) {
+          (merged as AppState).tournaments = reconcileTournaments(
+            merged.tournaments as Record<string, ConferenceTournament>,
+          );
+        }
+        return merged as AppState;
+      },
     },
   ),
 );

@@ -62,11 +62,57 @@ function topologicalGameOrder(games: BracketGame[]): BracketGame[] {
 }
 
 // ---------------------------------------------------------------------------
+// Reseeding support
+// ---------------------------------------------------------------------------
+
+/** Precomputed info for brackets with dynamically reseeded rounds. */
+interface ReseedInfo {
+  roundGames: BracketGame[][];  // Games grouped by round index
+  reseedRounds: Set<number>;    // Which rounds use dynamic reseeding
+}
+
+// ---------------------------------------------------------------------------
 // Single-tournament simulation
 // ---------------------------------------------------------------------------
 
 /**
+ * Resolves a game's teams and simulates the matchup. Shared helper for both
+ * the fast path and the round-by-round reseeded path.
+ */
+function resolveAndPlay(
+  game: BracketGame,
+  seedMap: Map<number, TournamentTeam>,
+  gameWinners: Map<string, TournamentTeam>,
+  weights: BlendWeights,
+  sigmas: SigmaConfig,
+): { winner: TournamentTeam; loser?: TournamentTeam } {
+  let teamA: TournamentTeam | undefined;
+  if (game.seedA != null) teamA = seedMap.get(game.seedA);
+  else if (game.sourceGameA) teamA = gameWinners.get(game.sourceGameA);
+
+  let teamB: TournamentTeam | undefined;
+  if (game.seedB != null) teamB = seedMap.get(game.seedB);
+  else if (game.sourceGameB) teamB = gameWinners.get(game.sourceGameB);
+
+  // Byes: if only one team is present, they advance automatically
+  if (teamA && !teamB) return { winner: teamA };
+  if (teamB && !teamA) return { winner: teamB };
+  if (!teamA || !teamB) throw new Error(`Game ${game.id}: could not resolve both teams`);
+
+  const pA = blendedWinProbability(teamA.ratings, teamB.ratings, weights, sigmas);
+  const winner = Math.random() < pA ? teamA : teamB;
+  const loser = winner === teamA ? teamB : teamA;
+  return { winner, loser };
+}
+
+/**
  * Simulates a single run of a tournament bracket and returns the winning team.
+ *
+ * Two code paths:
+ * - **Fast path** (no reseeding): processes games in topological order.
+ * - **Reseeded path**: processes round-by-round. For reseeded rounds, collects
+ *   surviving teams, sorts by seed, assigns byes to top seeds if needed, and
+ *   pairs remaining teams best-vs-worst.
  *
  * Pure function — no DOM or side-effect dependencies so it can run inside
  * a Web Worker without modification.
@@ -76,48 +122,63 @@ function simulateOnce(
   seedMap: Map<number, TournamentTeam>,
   weights: BlendWeights,
   sigmas: SigmaConfig,
+  finalGameId: string,
+  reseedInfo?: ReseedInfo,
 ): TournamentTeam {
-  // Maps game ID → the team that won that game
   const gameWinners = new Map<string, TournamentTeam>();
 
-  for (const game of orderedGames) {
-    // Resolve team A
-    let teamA: TournamentTeam | undefined;
-    if (game.seedA != null) {
-      teamA = seedMap.get(game.seedA);
-    } else if (game.sourceGameA) {
-      teamA = gameWinners.get(game.sourceGameA);
+  if (!reseedInfo) {
+    // --- Fast path: no reseeding, process in topological order ---
+    for (const game of orderedGames) {
+      const { winner } = resolveAndPlay(game, seedMap, gameWinners, weights, sigmas);
+      gameWinners.set(game.id, winner);
     }
+  } else {
+    // --- Round-by-round with reseeding support ---
+    const eliminated = new Set<number>();
 
-    // Resolve team B
-    let teamB: TournamentTeam | undefined;
-    if (game.seedB != null) {
-      teamB = seedMap.get(game.seedB);
-    } else if (game.sourceGameB) {
-      teamB = gameWinners.get(game.sourceGameB);
-    }
+    for (let round = 0; round < reseedInfo.roundGames.length; round++) {
+      const gamesInRound = reseedInfo.roundGames[round];
+      if (gamesInRound.length === 0) continue;
 
-    // Handle byes: if only one team is present, they advance automatically
-    if (teamA && !teamB) {
-      gameWinners.set(game.id, teamA);
-      continue;
-    }
-    if (teamB && !teamA) {
-      gameWinners.set(game.id, teamB);
-      continue;
-    }
-    if (!teamA || !teamB) {
-      throw new Error(`Game ${game.id}: could not resolve both teams`);
-    }
+      if (reseedInfo.reseedRounds.has(round)) {
+        // Collect survivors (not yet eliminated), sorted best seed first
+        const survivors: TournamentTeam[] = [];
+        for (const [seed, team] of seedMap) {
+          if (!eliminated.has(seed)) survivors.push(team);
+        }
+        survivors.sort((a, b) => a.seed - b.seed);
 
-    // Simulate the game
-    const pA = blendedWinProbability(teamA.ratings, teamB.ratings, weights, sigmas);
-    const winner = Math.random() < pA ? teamA : teamB;
-    gameWinners.set(game.id, winner);
+        const numGames = gamesInRound.length;
+        const numByes = survivors.length - 2 * numGames;
+
+        // Top seeds get byes; pair remaining best-vs-worst
+        const playingTeams = survivors.slice(numByes);
+
+        for (let g = 0; g < numGames; g++) {
+          const game = gamesInRound[g];
+          const teamA = playingTeams[g];
+          const teamB = playingTeams[playingTeams.length - 1 - g];
+
+          const pA = blendedWinProbability(teamA.ratings, teamB.ratings, weights, sigmas);
+          const winner = Math.random() < pA ? teamA : teamB;
+          const loser = winner === teamA ? teamB : teamA;
+
+          gameWinners.set(game.id, winner);
+          eliminated.add(loser.seed);
+        }
+      } else {
+        // Normal round — resolve via source links
+        for (const game of gamesInRound) {
+          const { winner, loser } = resolveAndPlay(game, seedMap, gameWinners, weights, sigmas);
+          gameWinners.set(game.id, winner);
+          if (loser) eliminated.add(loser.seed);
+        }
+      }
+    }
   }
 
-  // The winner of the final game is the tournament champion
-  const champion = gameWinners.get(orderedGames[orderedGames.length - 1].id);
+  const champion = gameWinners.get(finalGameId);
   if (!champion) throw new Error('Simulation failed: no champion determined');
   return champion;
 }
@@ -146,6 +207,17 @@ export function runSimulationCore(
   const seedMap = buildSeedMap(teams);
   const orderedGames = topologicalGameOrder(bracket.games);
 
+  // Precompute reseeding info (if applicable)
+  let reseedInfo: ReseedInfo | undefined;
+  if (bracket.reseedBeforeRounds && bracket.reseedBeforeRounds.length > 0) {
+    const roundGames: BracketGame[][] = [];
+    for (const game of bracket.games) {
+      while (roundGames.length <= game.round) roundGames.push([]);
+      roundGames[game.round].push(game);
+    }
+    reseedInfo = { roundGames, reseedRounds: new Set(bracket.reseedBeforeRounds) };
+  }
+
   // Win counters keyed by team name
   const winCounts = new Map<string, number>();
   for (const t of teams) winCounts.set(t.name, 0);
@@ -156,7 +228,7 @@ export function runSimulationCore(
     if (onProgress && i > 0 && i % progressInterval === 0) {
       onProgress(i, numSimulations);
     }
-    const champion = simulateOnce(orderedGames, seedMap, weights, sigmas);
+    const champion = simulateOnce(orderedGames, seedMap, weights, sigmas, bracket.finalGameId, reseedInfo);
     winCounts.set(champion.name, (winCounts.get(champion.name) ?? 0) + 1);
   }
 

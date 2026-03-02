@@ -47,7 +47,8 @@ export default function TournamentDetail({ conferenceId }: Props) {
 
   const running = simulatingId === conferenceId;
   const teamCount = tournament.teams.length;
-  const byeSeeds = getByeSeeds(teamCount);
+  const bracketType = tournament.bracketType ?? 'standard';
+  const byeSeeds = getByeSeeds(teamCount, bracketType);
   const isCompleted = tournament.status === 'completed';
 
   const strategyMode = useAppStore((s) => s.strategyMode);
@@ -214,8 +215,17 @@ export default function TournamentDetail({ conferenceId }: Props) {
         <h2 className="text-xl font-bold">{tournament.name} Tournament</h2>
         <p className="text-sm text-gray-400 mt-1">
           {teamCount} teams · Starts {tournament.startDate}
-          {byeSeeds.length > 0 && (
+          {bracketType === 'stairway' ? (
+            <> · Stairway format (seeds 1-2 enter in semis)</>
+          ) : bracketType === 'double_bye' ? (
+            <> · Seeds 1-4 get double byes</>
+          ) : bracketType === 'swac_hybrid' ? (
+            <> · Hybrid format (seeds 1-2 double byes, play-in chains)</>
+          ) : byeSeeds.length > 0 ? (
             <> · Seeds {byeSeeds.join(', ')} get byes</>
+          ) : null}
+          {tournament.bracket.reseedBeforeRounds && tournament.bracket.reseedBeforeRounds.length > 0 && (
+            <> · Reseeded after round {tournament.bracket.reseedBeforeRounds.map(r => r).join(', ')}</>
           )}
         </p>
       </div>

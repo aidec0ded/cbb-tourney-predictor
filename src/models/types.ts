@@ -63,6 +63,7 @@ export interface BracketStructure {
   rounds: number;          // Total number of rounds
   games: BracketGame[];    // All games in the bracket
   finalGameId: string;     // ID of the championship game
+  reseedBeforeRounds?: number[];  // Rounds where matchups are dynamically determined by surviving seeds
 }
 
 // ---------------------------------------------------------------------------
@@ -70,6 +71,8 @@ export interface BracketStructure {
 // ---------------------------------------------------------------------------
 
 export type TournamentStatus = 'upcoming' | 'in_progress' | 'completed';
+
+export type BracketType = 'standard' | 'stairway' | 'double_bye' | 'swac_hybrid';
 
 export interface TournamentResult {
   winnerName: string;
@@ -88,6 +91,7 @@ export interface ConferenceTournament {
   name: string;
   teams: TournamentTeam[];
   bracket: BracketStructure;
+  bracketType: BracketType;
   status: TournamentStatus;
   startDate: string;
   result?: TournamentResult;
