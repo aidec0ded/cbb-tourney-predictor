@@ -4,6 +4,7 @@ import type {
   CompetitorEntry,
   ConferenceTournament,
   LeaderboardContext,
+  OwnershipConfigOverrides,
   OwnershipModelConfig,
   OwnershipOverrides,
   StrategyMode,
@@ -12,6 +13,7 @@ import type {
   TeamStrategyScore,
   TournamentPick,
   TournamentStrategyRecommendation,
+  TournamentTeam,
   WhatIfResult,
 } from '../models/types';
 import { DEFAULT_OWNERSHIP_CONFIG } from '../models/constants';
@@ -21,19 +23,29 @@ import {
 } from './ev';
 
 // ---------------------------------------------------------------------------
+// 0. Resolve per-conference config overrides
+// ---------------------------------------------------------------------------
+
+export function resolveOwnershipConfig(
+  globalConfig: OwnershipModelConfig,
+  conferenceOverrides?: Partial<OwnershipModelConfig>,
+): OwnershipModelConfig {
+  if (!conferenceOverrides) return globalConfig;
+  return { ...globalConfig, ...conferenceOverrides };
+}
+
+// ---------------------------------------------------------------------------
 // 1. Ownership estimation
 // ---------------------------------------------------------------------------
 
 /**
  * Enriches simulation results with estimatedOwnership and leverageScore.
  *
- * Three steps:
- *  1. Seed-based priors from config
- *  2. Analytics adjustment: boost if winProb exceeds seed expectation, penalize if below
- *  3. Normalize to sum to 1.0
- */
-/**
- * Enriches simulation results with estimatedOwnership and leverageScore.
+ * When teams with KenPom data are provided, computes ownership priors from
+ * KenPom AdjEM (softmax → multiply by seed → concentrate → normalize).
+ * This models how the field (mostly KenPom users) actually picks.
+ *
+ * Falls back to seed-based priors when KenPom data isn't available.
  *
  * If `overrides` is provided (teamName -> ownership fraction), pinned teams
  * keep their override value and remaining teams are normalized around the
@@ -43,23 +55,68 @@ export function estimateOwnership(
   simResults: TeamSimulationResult[],
   config: OwnershipModelConfig = DEFAULT_OWNERSHIP_CONFIG,
   overrides?: Record<string, number>,
+  teams?: TournamentTeam[],
 ): TeamSimulationResult[] {
   if (simResults.length === 0) return [];
 
   const FLOOR = 0.003;
 
-  // Step 1: seed-based priors + analytics adjustment
+  // Check if teams have KenPom data (any non-zero adjEM)
+  const hasKenpomData = teams != null &&
+    teams.length > 0 &&
+    teams.some((t) => t.ratings.kenpom.adjEM !== 0);
+
+  // Build KenPom-informed priors if available
+  let kenpomPriors: Map<number, number> | null = null;
+  if (hasKenpomData && teams) {
+    const temp = config.temperature;
+    const conc = config.concentration;
+    // Step 1: Softmax of KenPom AdjEM
+    const maxEM = Math.max(...teams.map((t) => t.ratings.kenpom.adjEM));
+    const expValues = teams.map((t) => ({
+      seed: t.seed,
+      adjEM: t.ratings.kenpom.adjEM,
+      exp: Math.exp((t.ratings.kenpom.adjEM - maxEM) / temp),
+    }));
+    const expSum = expValues.reduce((sum, v) => sum + v.exp, 0);
+    const softmaxProbs = expValues.map((v) => ({ ...v, prob: v.exp / expSum }));
+
+    // Step 2: Multiply by seed to get "field-perceived EV"
+    const fieldEVs = softmaxProbs.map((v) => ({
+      ...v,
+      fieldEV: v.prob * v.seed,
+    }));
+
+    // Step 3: Concentration — field concentrates on top options
+    const concentrated = fieldEVs.map((v) => ({
+      ...v,
+      concentrated: Math.pow(v.fieldEV, conc),
+    }));
+
+    // Step 4: Normalize to sum to 1.0
+    const concSum = concentrated.reduce((sum, v) => sum + v.concentrated, 0);
+    kenpomPriors = new Map(
+      concentrated.map((v) => [v.seed, concSum > 0 ? v.concentrated / concSum : 1 / teams.length]),
+    );
+  }
+
+  // Step 1: compute base priors + analytics adjustment
   const raw = simResults.map((team) => {
     // If there's a manual override for this team, use it directly
     if (overrides && overrides[team.teamName] !== undefined) {
       return { ...team, rawOwnership: overrides[team.teamName], pinned: true };
     }
 
-    const seedIndex = team.seed - 1;
-    const basePrior =
-      seedIndex < config.baseSeedOwnership.length
-        ? config.baseSeedOwnership[seedIndex]
-        : FLOOR;
+    let basePrior: number;
+    if (kenpomPriors && kenpomPriors.has(team.seed)) {
+      basePrior = kenpomPriors.get(team.seed)!;
+    } else {
+      const seedIndex = team.seed - 1;
+      basePrior =
+        seedIndex < config.baseSeedOwnership.length
+          ? config.baseSeedOwnership[seedIndex]
+          : FLOOR;
+    }
 
     let adjusted: number;
     if (team.winProbability > basePrior) {
@@ -135,7 +192,9 @@ export function computeAggressionMultiplier(
 // ---------------------------------------------------------------------------
 
 /**
- * Balanced: Pure EV with mild leverage tilt (15% weight toward contrarian picks).
+ * Balanced: EV-optimized with mild multiplicative leverage bonus.
+ * Leverage provides a bounded 0–15% bonus on top of EV, ensuring EV
+ * always controls ranking while contrarian picks get a mild tilt.
  * Minimum 2% winProb to be scored.
  */
 export function scoreBalanced(
@@ -144,24 +203,24 @@ export function scoreBalanced(
 ): number {
   if (team.winProbability < 0.02) return 0;
 
-  const evComponent = team.expectedValue;
-  const leverageComponent = team.leverageScore ?? team.expectedValue;
+  const leverage = team.leverageScore ?? 1;
+  const leverageBonus = Math.min(Math.log2(Math.max(leverage, 1)), 4) / 4 * 0.15;
 
-  return evComponent * 0.85 + leverageComponent * 0.15;
+  return team.expectedValue * (1 + leverageBonus);
 }
 
 /**
  * Aggressive: EV x seedMultiplier x ownershipPenalty^aggressionMult.
- * Minimum 4% winProb.
+ * Minimum 2% winProb (same as Balanced).
  */
 export function scoreAggressive(
   team: TeamSimulationResult,
   _allTeams: TeamSimulationResult[],
   aggressionMult: number = 1.0,
 ): number {
-  if (team.winProbability < 0.04) return 0;
+  if (team.winProbability < 0.02) return 0;
 
-  const seedMultiplier = 1 + 0.3 * Math.log(team.seed);
+  const seedMultiplier = Math.sqrt(team.seed);
   const ownership = team.estimatedOwnership ?? 0.1;
   const ownershipPenalty = 1 / Math.sqrt(Math.max(ownership, 0.005));
 
@@ -169,15 +228,20 @@ export function scoreAggressive(
 }
 
 /**
- * Conservative: winProbability x (1 + seed x 0.05).
- * Heavy probability focus, tiny seed bonus. No floor.
+ * Conservative: geometric mean of win probability and estimated ownership.
+ * score = winProbability^0.7 × estimatedOwnership^0.3
+ *
+ * High probability + high ownership (matching the field) scores highest.
+ * When the field overwhelmingly picks a team, matching them protects your
+ * position regardless of outcome.
  */
 export function scoreConservative(
   team: TeamSimulationResult,
   _allTeams: TeamSimulationResult[],
   _aggressionMult: number = 1.0,
 ): number {
-  return team.winProbability * (1 + team.seed * 0.05);
+  const ownership = team.estimatedOwnership ?? 0.1;
+  return Math.pow(team.winProbability, 0.7) * Math.pow(Math.max(ownership, 0.001), 0.3);
 }
 
 // ---------------------------------------------------------------------------
@@ -218,14 +282,17 @@ export function generateReasoning(
     return `${pctStr}% at seed ${team.seed} — ${ownStr}% ownership gives ${(team.leverageScore ?? 0).toFixed(2)} leverage`;
   }
 
-  // conservative
+  // conservative — field-matching logic
+  if (isFavorite && team.estimatedOwnership && team.estimatedOwnership >= 0.3) {
+    return `Safest pick at ${pctStr}% — ~${ownStr}% of field agrees, minimizes variance`;
+  }
+  if (team.estimatedOwnership && team.estimatedOwnership >= 0.25) {
+    return `~${ownStr}% of field picking this team — matching protects position at ${pctStr}% win rate`;
+  }
   if (isFavorite) {
-    return `Safest pick at ${pctStr}% — protects current position`;
+    return `Highest probability at ${pctStr}% but only ~${ownStr}% field ownership`;
   }
-  if (team.winProbability >= 0.25) {
-    return `Solid ${pctStr}% chance — reliable floor builder`;
-  }
-  return `Only ${pctStr}% to win — risky for a protective strategy`;
+  return `Only ${pctStr}% to win with ~${ownStr}% field overlap — risky for a protective strategy`;
 }
 
 // ---------------------------------------------------------------------------
@@ -240,9 +307,10 @@ export function getStrategyRecommendation(
   aggressionMult: number = 1.0,
   config: OwnershipModelConfig = DEFAULT_OWNERSHIP_CONFIG,
   overrides?: Record<string, number>,
+  teams?: TournamentTeam[],
 ): TournamentStrategyRecommendation {
-  // Enrich with ownership
-  const enriched = estimateOwnership(simResults, config, overrides);
+  // Enrich with ownership (KenPom-informed when teams provided)
+  const enriched = estimateOwnership(simResults, config, overrides, teams);
 
   // Score all teams
   const scored: TeamStrategyScore[] = enriched
@@ -318,6 +386,7 @@ export function computeFullStrategy(
   },
   ownershipConfig: OwnershipModelConfig = DEFAULT_OWNERSHIP_CONFIG,
   ownershipOverrides: OwnershipOverrides = {},
+  ownershipConfigOverrides: OwnershipConfigOverrides = {},
 ): StrategyOutput {
   // Count remaining tournaments
   const remaining = Object.values(tournaments).filter(
@@ -345,6 +414,8 @@ export function computeFullStrategy(
     const results = simResults[t.id];
     if (!results || results.length === 0) continue;
 
+    const effectiveConfig = resolveOwnershipConfig(ownershipConfig, ownershipConfigOverrides[t.id]);
+
     recommendations.push(
       getStrategyRecommendation(
         t.id,
@@ -352,8 +423,9 @@ export function computeFullStrategy(
         results,
         mode,
         aggressionMult,
-        ownershipConfig,
+        effectiveConfig,
         ownershipOverrides[t.id],
+        t.teams,
       ),
     );
   }

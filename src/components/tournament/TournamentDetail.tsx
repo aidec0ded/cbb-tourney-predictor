@@ -4,13 +4,14 @@ import { getByeSeeds } from '../../engine/bracket';
 import type { WorkerResponse } from '../../workers/simulation.worker';
 import { buildPickFromSelection, getModelRecommendation } from '../../engine/ev';
 import type { ModelRecommendation } from '../../engine/ev';
-import { computeWhatIf, getStrategyRecommendation, estimateOwnership } from '../../engine/strategy';
+import { computeWhatIf, getStrategyRecommendation, estimateOwnership, resolveOwnershipConfig } from '../../engine/strategy';
 import ResultsTable from '../common/ResultsTable';
 import ProbabilityChart from '../common/ProbabilityChart';
 import TeamInputTable from './TeamInputTable';
 import BulkPasteArea from './BulkPasteArea';
 import PickPanel from './PickPanel';
 import SystemComparison from './SystemComparison';
+import ConferenceOwnershipSettings from './ConferenceOwnershipSettings';
 
 interface Props {
   conferenceId: string;
@@ -36,6 +37,8 @@ export default function TournamentDetail({ conferenceId }: Props) {
   const clearTournamentResult = useAppStore((s) => s.clearTournamentResult);
   const ownershipConfig = useAppStore((s) => s.ownershipConfig);
   const ownershipOverrides = useAppStore((s) => s.ownershipOverrides);
+  const ownershipConfigOverrides = useAppStore((s) => s.ownershipConfigOverrides);
+  const effectiveOwnershipConfig = resolveOwnershipConfig(ownershipConfig, ownershipConfigOverrides[conferenceId]);
 
   // Results entry state
   const [selectedWinner, setSelectedWinner] = useState('');
@@ -58,8 +61,8 @@ export default function TournamentDetail({ conferenceId }: Props) {
   const confOverrides = ownershipOverrides[conferenceId];
   const enrichedResults = useMemo(() => {
     if (!results) return null;
-    return estimateOwnership(results, ownershipConfig, confOverrides);
-  }, [results, ownershipConfig, confOverrides]);
+    return estimateOwnership(results, effectiveOwnershipConfig, confOverrides, tournament.teams);
+  }, [results, effectiveOwnershipConfig, confOverrides, tournament.teams]);
 
   const evRec = enrichedResults ? getModelRecommendation(enrichedResults) : null;
 
@@ -71,8 +74,9 @@ export default function TournamentDetail({ conferenceId }: Props) {
       results,
       strategyMode,
       1.0,
-      ownershipConfig,
+      effectiveOwnershipConfig,
       confOverrides,
+      tournament.teams,
     );
     const top = strat.topPick;
     return {
@@ -81,7 +85,7 @@ export default function TournamentDetail({ conferenceId }: Props) {
       ev: top.expectedValue,
       confidence: strat.confidence,
     };
-  }, [results, conferenceId, tournament.name, strategyMode, ownershipConfig, confOverrides]);
+  }, [results, conferenceId, tournament.name, strategyMode, effectiveOwnershipConfig, confOverrides, tournament.teams]);
 
   const activeRec = recMode === 'strategy' ? strategyRec : evRec;
   const recLabel = recMode === 'strategy'
@@ -367,6 +371,9 @@ export default function TournamentDetail({ conferenceId }: Props) {
         allSimResults={allSimResults}
         isCompleted={isCompleted}
       />
+
+      {/* Per-conference ownership settings */}
+      <ConferenceOwnershipSettings conferenceId={conferenceId} />
 
       {/* Results */}
       {enrichedResults && (

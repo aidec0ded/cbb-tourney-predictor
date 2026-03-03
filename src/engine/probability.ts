@@ -11,9 +11,9 @@ export const DEFAULT_SIGMA: SigmaConfig = {
 };
 
 export const DEFAULT_WEIGHTS: BlendWeights = {
-  kenpom: 1 / 3,
-  torvik: 1 / 3,
-  evanMiya: 1 / 3,
+  kenpom: 0.30,
+  torvik: 0.30,
+  evanMiya: 0.40,
 };
 
 // ---------------------------------------------------------------------------

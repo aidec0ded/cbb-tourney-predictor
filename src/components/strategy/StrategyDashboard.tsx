@@ -6,9 +6,9 @@ import type { StrategyMode, CompetitorEntry } from '../../models/types';
 import WhatIfPanel from './WhatIfPanel';
 
 const MODE_DESCRIPTIONS: Record<StrategyMode, string> = {
-  balanced: 'Pick highest EV option — best risk/reward balance.',
-  aggressive: 'Maximize variance — favor high-seed upsets with low ownership for 1st place ceiling.',
-  conservative: 'Protect current position — favor high-probability picks to minimize downside.',
+  balanced: 'EV-optimized with mild leverage bonus for contrarian picks.',
+  aggressive: 'Maximize differentiation — high-seed upsets at low ownership for ceiling.',
+  conservative: 'Match the field — minimize variance relative to other players.',
 };
 
 const CONFIDENCE_STYLES: Record<string, string> = {
@@ -36,6 +36,7 @@ export default function StrategyDashboard() {
 
   const ownershipConfig = useAppStore((s) => s.ownershipConfig);
   const ownershipOverrides = useAppStore((s) => s.ownershipOverrides);
+  const ownershipConfigOverrides = useAppStore((s) => s.ownershipConfigOverrides);
 
   const strategy = useMemo(
     () =>
@@ -49,8 +50,9 @@ export default function StrategyDashboard() {
           : undefined,
         ownershipConfig,
         ownershipOverrides,
+        ownershipConfigOverrides,
       ),
-    [tournaments, simResults, picks, strategyMode, competitors, currentProjection.earnedPoints, ownershipConfig, ownershipOverrides],
+    [tournaments, simResults, picks, strategyMode, competitors, currentProjection.earnedPoints, ownershipConfig, ownershipOverrides, ownershipConfigOverrides],
   );
 
   const handleAddCompetitor = () => {

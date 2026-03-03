@@ -26,4 +26,6 @@ export const DEFAULT_OWNERSHIP_CONFIG: OwnershipModelConfig = {
   baseSeedOwnership: DEFAULT_BASE_SEED_OWNERSHIP,
   analyticsBoostFactor: 1.5,
   analyticsPenaltyFactor: 0.6,
+  temperature: 4.0,
+  concentration: 1.3,
 };

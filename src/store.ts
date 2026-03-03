@@ -11,6 +11,7 @@ import type {
   BlendWeights,
   StrategyMode,
   CompetitorEntry,
+  OwnershipConfigOverrides,
   OwnershipModelConfig,
   OwnershipOverrides,
 } from './models/types';
@@ -130,6 +131,7 @@ interface AppState {
   competitors: CompetitorEntry[];
   ownershipConfig: OwnershipModelConfig;
   ownershipOverrides: OwnershipOverrides;
+  ownershipConfigOverrides: OwnershipConfigOverrides;
 
   // Transient UI state (not persisted)
   selectedConferenceId: string | null;
@@ -156,6 +158,8 @@ interface AppState {
   setOwnershipConfig: (config: OwnershipModelConfig) => void;
   setOwnershipOverride: (conferenceId: string, teamName: string, ownership: number) => void;
   clearOwnershipOverride: (conferenceId: string, teamName: string) => void;
+  setOwnershipConfigOverride: (conferenceId: string, overrides: Partial<OwnershipModelConfig>) => void;
+  clearOwnershipConfigOverride: (conferenceId: string) => void;
   exportState: () => string;
   importState: (json: string) => void;
 }
@@ -178,6 +182,7 @@ export const useAppStore = create<AppState>()(
       competitors: [],
       ownershipConfig: { ...DEFAULT_OWNERSHIP_CONFIG },
       ownershipOverrides: {},
+      ownershipConfigOverrides: {},
       selectedConferenceId: null,
       simulatingId: null,
       activeView: 'conference',
@@ -334,15 +339,35 @@ export const useAppStore = create<AppState>()(
           return { ownershipOverrides: newOverrides };
         }),
 
+      setOwnershipConfigOverride: (conferenceId, overrides) =>
+        set((state) => ({
+          ownershipConfigOverrides: {
+            ...state.ownershipConfigOverrides,
+            [conferenceId]: {
+              ...state.ownershipConfigOverrides[conferenceId],
+              ...overrides,
+            },
+          },
+        })),
+
+      clearOwnershipConfigOverride: (conferenceId) =>
+        set((state) => {
+          const newOverrides = { ...state.ownershipConfigOverrides };
+          delete newOverrides[conferenceId];
+          return { ownershipConfigOverrides: newOverrides };
+        }),
+
       exportState: () => {
         const {
           tournaments, simResults, picks, sigmas, weights, simCount,
           strategyMode, competitors, ownershipConfig, ownershipOverrides,
+          ownershipConfigOverrides,
         } = get();
         return JSON.stringify(
           {
             tournaments, simResults, picks, sigmas, weights, simCount,
             strategyMode, competitors, ownershipConfig, ownershipOverrides,
+            ownershipConfigOverrides,
           },
           null,
           2,
@@ -363,6 +388,7 @@ export const useAppStore = create<AppState>()(
             competitors: data.competitors ?? [],
             ownershipConfig: data.ownershipConfig ?? { ...DEFAULT_OWNERSHIP_CONFIG },
             ownershipOverrides: data.ownershipOverrides ?? {},
+            ownershipConfigOverrides: data.ownershipConfigOverrides ?? {},
           });
         } catch (e) {
           console.error('[Store] Failed to import state:', e);
@@ -371,7 +397,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'cbb-tourney-predictor',
-      version: 5,
+      version: 7,
       partialize: (state) => ({
         tournaments: state.tournaments,
         simResults: state.simResults,
@@ -383,17 +409,36 @@ export const useAppStore = create<AppState>()(
         competitors: state.competitors,
         ownershipConfig: state.ownershipConfig,
         ownershipOverrides: state.ownershipOverrides,
+        ownershipConfigOverrides: state.ownershipConfigOverrides,
       }),
-      migrate: () => ({
-        tournaments: initTournaments(),
-        simResults: {},
-        picks: {},
-        sigmas: { ...DEFAULT_SIGMA },
-        weights: { ...DEFAULT_WEIGHTS },
-        simCount: DEFAULT_SIM_COUNT,
-        ownershipConfig: { ...DEFAULT_OWNERSHIP_CONFIG },
-        ownershipOverrides: {},
-      }),
+      migrate: (persisted: unknown, version: number) => {
+        const state = persisted as Record<string, unknown>;
+        if (version < 6) {
+          // Only update weights if user hasn't customized them (still at old 1/3 defaults)
+          const oldWeights = state.weights as BlendWeights | undefined;
+          if (
+            oldWeights &&
+            Math.abs(oldWeights.kenpom - 1 / 3) < 0.01 &&
+            Math.abs(oldWeights.torvik - 1 / 3) < 0.01 &&
+            Math.abs(oldWeights.evanMiya - 1 / 3) < 0.01
+          ) {
+            state.weights = { kenpom: 0.30, torvik: 0.30, evanMiya: 0.40 };
+          }
+        }
+        if (version < 7) {
+          // Backfill temperature/concentration into existing ownershipConfig
+          const oc = state.ownershipConfig as Record<string, unknown> | undefined;
+          if (oc) {
+            if (oc.temperature == null) oc.temperature = 4.0;
+            if (oc.concentration == null) oc.concentration = 1.3;
+          }
+          // Initialize ownershipConfigOverrides
+          if (!state.ownershipConfigOverrides) {
+            state.ownershipConfigOverrides = {};
+          }
+        }
+        return state;
+      },
       merge: (persisted, current) => {
         const merged = { ...current, ...(persisted as object) };
         // Reconcile tournaments with current conference metadata on every hydration

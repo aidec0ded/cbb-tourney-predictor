@@ -178,7 +178,12 @@ export interface OwnershipModelConfig {
   baseSeedOwnership: number[];  // index 0 = seed 1
   analyticsBoostFactor: number;
   analyticsPenaltyFactor: number;
+  temperature: number;       // softmax temperature (default 4.0)
+  concentration: number;     // field concentration exponent (default 1.3)
 }
+
+/** Per-conference overrides for ownership model parameters */
+export type OwnershipConfigOverrides = Record<string, Partial<OwnershipModelConfig>>;
 
 /** conferenceId -> teamName -> manual ownership fraction (0.0–1.0) */
 export type OwnershipOverrides = Record<string, Record<string, number>>;

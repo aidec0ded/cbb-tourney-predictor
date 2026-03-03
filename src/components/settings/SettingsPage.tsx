@@ -139,7 +139,7 @@ function OwnershipModelSection() {
   const config = useAppStore((s) => s.ownershipConfig);
   const setOwnershipConfig = useAppStore((s) => s.setOwnershipConfig);
 
-  const handleFactorChange = (key: 'analyticsBoostFactor' | 'analyticsPenaltyFactor', value: string) => {
+  const handleFactorChange = (key: 'analyticsBoostFactor' | 'analyticsPenaltyFactor' | 'temperature' | 'concentration', value: string) => {
     const num = parseFloat(value);
     if (!isNaN(num) && num >= 0) {
       setOwnershipConfig({ ...config, [key]: num });
@@ -159,7 +159,45 @@ function OwnershipModelSection() {
     <section className="p-4 rounded-lg bg-gray-900 border border-gray-800">
       <h3 className="text-sm font-semibold text-gray-300 mb-4">Ownership Model</h3>
 
-      {/* Factor inputs */}
+      {/* Temperature & Concentration */}
+      <div className="flex flex-wrap gap-4 mb-4">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-500 flex items-center gap-1">
+            Temperature
+            <Tooltip text="Softmax temperature for KenPom-informed priors. Lower = field concentrates on best-rated team. Higher = field spreads picks more evenly across contenders.">
+              <span className="text-[10px] text-gray-500 cursor-help border-b border-dotted border-gray-600">(?)</span>
+            </Tooltip>
+          </span>
+          <input
+            type="number"
+            step="0.5"
+            min="1.0"
+            max="20.0"
+            value={config.temperature}
+            onChange={(e) => handleFactorChange('temperature', e.target.value)}
+            className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-500 flex items-center gap-1">
+            Concentration
+            <Tooltip text="Field concentration exponent. Higher = more of the field piles onto the top 1-2 picks. Lower = field is more dispersed across options.">
+              <span className="text-[10px] text-gray-500 cursor-help border-b border-dotted border-gray-600">(?)</span>
+            </Tooltip>
+          </span>
+          <input
+            type="number"
+            step="0.1"
+            min="0.5"
+            max="3.0"
+            value={config.concentration}
+            onChange={(e) => handleFactorChange('concentration', e.target.value)}
+            className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
+          />
+        </div>
+      </div>
+
+      {/* Analytics Factor inputs */}
       <div className="flex flex-wrap gap-4 mb-4">
         <div className="flex items-center gap-2">
           <span className="text-xs text-gray-500 flex items-center gap-1">
@@ -192,6 +230,10 @@ function OwnershipModelSection() {
           />
         </div>
       </div>
+
+      <p className="text-[10px] text-gray-600 mb-4">
+        These are global defaults. Per-conference overrides can be set on each tournament's detail page.
+      </p>
 
       {/* Base seed ownership */}
       <div className="mb-2">
