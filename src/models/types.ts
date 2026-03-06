@@ -235,3 +235,66 @@ export interface WhatIfResult {
   deltaCeiling: number;
   riskAssessment: string;
 }
+
+// ---------------------------------------------------------------------------
+// Field analysis — competitor pick tracking & meta-game
+// ---------------------------------------------------------------------------
+
+/** A single competitor's pick for one conference */
+export interface CompetitorPick {
+  teamName: string;
+  seed: number;
+}
+
+/** Strategy archetype inferred from revealed picks */
+export type CompetitorProfile =
+  | 'chalk'        // Overwhelmingly picks 1-seeds / favorites
+  | 'seed_chaser'  // Biased toward high seeds for point value
+  | 'contrarian'   // Avoids popular picks
+  | 'analytics'    // Picks align with model top-EV recommendations
+  | 'unknown';     // Insufficient data
+
+/** One of the 52 other competitors */
+export interface FieldCompetitor {
+  name: string;
+  picks: Record<string, CompetitorPick>;  // conferenceId -> pick
+  profile: CompetitorProfile;
+  profileConfidence: number;              // 0-1, scales with sample size
+}
+
+/** Observed ownership for one team in a conference */
+export interface ObservedOwnership {
+  teamName: string;
+  seed: number;
+  count: number;
+  percentage: number;
+}
+
+/** Observed ownership data for a conference */
+export interface ConferenceObservedOwnership {
+  conferenceId: string;
+  totalCompetitors: number;
+  teams: ObservedOwnership[];
+}
+
+/** Projected competitor score breakdown */
+export interface CompetitorScoreProjection {
+  name: string;
+  earnedPoints: number;
+  projectedPoints: number;
+  totalProjected: number;
+  resolvedPicks: number;
+  correctPicks: number;
+  unresolvedPicks: number;
+  profile: CompetitorProfile;
+}
+
+/** Scenario result: "if team X wins conference Y" */
+export interface FieldScenarioResult {
+  conferenceId: string;
+  winnerName: string;
+  winningSeed: number;
+  leaderboard: CompetitorScoreProjection[];
+  userRank: number;
+  benefitCount: number;
+}

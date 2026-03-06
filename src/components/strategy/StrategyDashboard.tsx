@@ -2,7 +2,8 @@ import { useMemo } from 'react';
 import { useAppStore } from '../../store';
 import { computeFullStrategy } from '../../engine/strategy';
 import { computeScoreProjection } from '../../engine/ev';
-import type { StrategyMode, CompetitorEntry } from '../../models/types';
+import { computeObservedOwnership, blendOwnership } from '../../engine/field';
+import type { StrategyMode, CompetitorEntry, TeamSimulationResult } from '../../models/types';
 import WhatIfPanel from './WhatIfPanel';
 
 const MODE_DESCRIPTIONS: Record<StrategyMode, string> = {
@@ -37,12 +38,26 @@ export default function StrategyDashboard() {
   const ownershipConfig = useAppStore((s) => s.ownershipConfig);
   const ownershipOverrides = useAppStore((s) => s.ownershipOverrides);
   const ownershipConfigOverrides = useAppStore((s) => s.ownershipConfigOverrides);
+  const fieldCompetitors = useAppStore((s) => s.fieldCompetitors);
+
+  // Blend observed ownership from field data into sim results for strategy
+  const blendedSimResults = useMemo(() => {
+    if (fieldCompetitors.length === 0) return simResults;
+    const blended: Record<string, TeamSimulationResult[]> = { ...simResults };
+    for (const [confId, results] of Object.entries(simResults)) {
+      const observed = computeObservedOwnership(fieldCompetitors, confId);
+      if (observed) {
+        blended[confId] = blendOwnership(results, observed, fieldCompetitors.length + 1);
+      }
+    }
+    return blended;
+  }, [simResults, fieldCompetitors]);
 
   const strategy = useMemo(
     () =>
       computeFullStrategy(
         tournaments,
-        simResults,
+        blendedSimResults,
         picks,
         strategyMode,
         competitors.length > 0
@@ -52,7 +67,7 @@ export default function StrategyDashboard() {
         ownershipOverrides,
         ownershipConfigOverrides,
       ),
-    [tournaments, simResults, picks, strategyMode, competitors, currentProjection.earnedPoints, ownershipConfig, ownershipOverrides, ownershipConfigOverrides],
+    [tournaments, blendedSimResults, picks, strategyMode, competitors, currentProjection.earnedPoints, ownershipConfig, ownershipOverrides, ownershipConfigOverrides],
   );
 
   const handleAddCompetitor = () => {

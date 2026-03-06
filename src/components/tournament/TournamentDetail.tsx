@@ -5,6 +5,7 @@ import type { WorkerResponse } from '../../workers/simulation.worker';
 import { buildPickFromSelection, getModelRecommendation } from '../../engine/ev';
 import type { ModelRecommendation } from '../../engine/ev';
 import { computeWhatIf, getStrategyRecommendation, estimateOwnership, resolveOwnershipConfig } from '../../engine/strategy';
+import { computeObservedOwnership, blendOwnership } from '../../engine/field';
 import ResultsTable from '../common/ResultsTable';
 import ProbabilityChart from '../common/ProbabilityChart';
 import TeamInputTable from './TeamInputTable';
@@ -38,7 +39,14 @@ export default function TournamentDetail({ conferenceId }: Props) {
   const ownershipConfig = useAppStore((s) => s.ownershipConfig);
   const ownershipOverrides = useAppStore((s) => s.ownershipOverrides);
   const ownershipConfigOverrides = useAppStore((s) => s.ownershipConfigOverrides);
+  const fieldCompetitors = useAppStore((s) => s.fieldCompetitors);
   const effectiveOwnershipConfig = resolveOwnershipConfig(ownershipConfig, ownershipConfigOverrides[conferenceId]);
+
+  // Observed ownership from field data
+  const observedOwnership = useMemo(
+    () => fieldCompetitors.length > 0 ? computeObservedOwnership(fieldCompetitors, conferenceId) : null,
+    [fieldCompetitors, conferenceId],
+  );
 
   // Results entry state
   const [selectedWinner, setSelectedWinner] = useState('');
@@ -57,12 +65,16 @@ export default function TournamentDetail({ conferenceId }: Props) {
   const strategyMode = useAppStore((s) => s.strategyMode);
   const [recMode, setRecMode] = useState<'ev' | 'strategy'>('ev');
 
-  // Enrich results with ownership
+  // Enrich results with ownership (blending observed field data when available)
   const confOverrides = ownershipOverrides[conferenceId];
   const enrichedResults = useMemo(() => {
     if (!results) return null;
-    return estimateOwnership(results, effectiveOwnershipConfig, confOverrides, tournament.teams);
-  }, [results, effectiveOwnershipConfig, confOverrides, tournament.teams]);
+    const estimated = estimateOwnership(results, effectiveOwnershipConfig, confOverrides, tournament.teams);
+    if (observedOwnership && fieldCompetitors.length > 0) {
+      return blendOwnership(estimated, observedOwnership, fieldCompetitors.length + 1);
+    }
+    return estimated;
+  }, [results, effectiveOwnershipConfig, confOverrides, tournament.teams, observedOwnership, fieldCompetitors.length]);
 
   const evRec = enrichedResults ? getModelRecommendation(enrichedResults) : null;
 
@@ -388,6 +400,51 @@ export default function TournamentDetail({ conferenceId }: Props) {
               showOwnership
             />
             <ProbabilityChart results={enrichedResults} />
+          </div>
+        </section>
+      )}
+
+      {/* Observed ownership from field data */}
+      {observedOwnership && enrichedResults && (
+        <section className="mt-6 mb-6">
+          <h3 className="text-sm font-semibold text-gray-300 mb-2">
+            Observed Field Picks
+            <span className="text-gray-600 font-normal ml-2">
+              ({observedOwnership.totalCompetitors} competitors)
+            </span>
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-gray-500 border-b border-gray-800">
+                  <th className="text-left py-1.5 pr-3 font-medium">Team</th>
+                  <th className="text-right py-1.5 pr-3 font-medium">Seed</th>
+                  <th className="text-right py-1.5 pr-3 font-medium">Picks</th>
+                  <th className="text-right py-1.5 pr-3 font-medium">Observed %</th>
+                  <th className="text-right py-1.5 font-medium">Model %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {observedOwnership.teams.map((t) => {
+                  const modelResult = enrichedResults.find((r) => r.teamName === t.teamName);
+                  return (
+                    <tr key={t.teamName} className="border-b border-gray-800/30">
+                      <td className="py-1 pr-3 text-gray-200">{t.teamName}</td>
+                      <td className="py-1 pr-3 text-right font-mono text-gray-500">{t.seed}</td>
+                      <td className="py-1 pr-3 text-right font-mono text-gray-300">{t.count}</td>
+                      <td className="py-1 pr-3 text-right font-mono text-gray-300">
+                        {(t.percentage * 100).toFixed(0)}%
+                      </td>
+                      <td className="py-1 text-right font-mono text-gray-400">
+                        {modelResult?.estimatedOwnership != null
+                          ? `${(modelResult.estimatedOwnership * 100).toFixed(0)}%`
+                          : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </section>
       )}

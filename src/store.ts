@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type {
+  CompetitorPick,
   ConferenceTournament,
+  FieldCompetitor,
   TournamentTeam,
   TeamSimulationResult,
   TournamentPick,
@@ -113,7 +115,7 @@ function reconcileTournaments(
 // View type
 // ---------------------------------------------------------------------------
 
-export type ActiveView = 'conference' | 'strategy' | 'settings' | 'results';
+export type ActiveView = 'conference' | 'strategy' | 'field' | 'settings' | 'results';
 
 // ---------------------------------------------------------------------------
 // Store shape
@@ -132,6 +134,8 @@ interface AppState {
   ownershipConfig: OwnershipModelConfig;
   ownershipOverrides: OwnershipOverrides;
   ownershipConfigOverrides: OwnershipConfigOverrides;
+  fieldCompetitors: FieldCompetitor[];
+  userName: string;
 
   // Transient UI state (not persisted)
   selectedConferenceId: string | null;
@@ -160,6 +164,9 @@ interface AppState {
   clearOwnershipOverride: (conferenceId: string, teamName: string) => void;
   setOwnershipConfigOverride: (conferenceId: string, overrides: Partial<OwnershipModelConfig>) => void;
   clearOwnershipConfigOverride: (conferenceId: string) => void;
+  setFieldCompetitors: (competitors: FieldCompetitor[]) => void;
+  updateFieldCompetitorPicks: (conferenceId: string, updates: { name: string; pick: CompetitorPick }[]) => void;
+  clearFieldData: () => void;
   exportState: () => string;
   importState: (json: string) => void;
 }
@@ -183,6 +190,8 @@ export const useAppStore = create<AppState>()(
       ownershipConfig: { ...DEFAULT_OWNERSHIP_CONFIG },
       ownershipOverrides: {},
       ownershipConfigOverrides: {},
+      fieldCompetitors: [],
+      userName: 'Robert Ray',
       selectedConferenceId: null,
       simulatingId: null,
       activeView: 'conference',
@@ -357,17 +366,35 @@ export const useAppStore = create<AppState>()(
           return { ownershipConfigOverrides: newOverrides };
         }),
 
+      setFieldCompetitors: (fieldCompetitors) => set({ fieldCompetitors }),
+
+      updateFieldCompetitorPicks: (conferenceId, updates) =>
+        set((state) => {
+          const updatedMap = new Map(updates.map((u) => [u.name, u.pick]));
+          const fieldCompetitors = state.fieldCompetitors.map((comp) => {
+            const newPick = updatedMap.get(comp.name);
+            if (!newPick) return comp;
+            return {
+              ...comp,
+              picks: { ...comp.picks, [conferenceId]: newPick },
+            };
+          });
+          return { fieldCompetitors };
+        }),
+
+      clearFieldData: () => set({ fieldCompetitors: [] }),
+
       exportState: () => {
         const {
           tournaments, simResults, picks, sigmas, weights, simCount,
           strategyMode, competitors, ownershipConfig, ownershipOverrides,
-          ownershipConfigOverrides,
+          ownershipConfigOverrides, fieldCompetitors, userName,
         } = get();
         return JSON.stringify(
           {
             tournaments, simResults, picks, sigmas, weights, simCount,
             strategyMode, competitors, ownershipConfig, ownershipOverrides,
-            ownershipConfigOverrides,
+            ownershipConfigOverrides, fieldCompetitors, userName,
           },
           null,
           2,
@@ -389,6 +416,8 @@ export const useAppStore = create<AppState>()(
             ownershipConfig: data.ownershipConfig ?? { ...DEFAULT_OWNERSHIP_CONFIG },
             ownershipOverrides: data.ownershipOverrides ?? {},
             ownershipConfigOverrides: data.ownershipConfigOverrides ?? {},
+            fieldCompetitors: data.fieldCompetitors ?? [],
+            userName: data.userName ?? 'Robert Ray',
           });
         } catch (e) {
           console.error('[Store] Failed to import state:', e);
@@ -397,7 +426,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'cbb-tourney-predictor',
-      version: 7,
+      version: 8,
       partialize: (state) => ({
         tournaments: state.tournaments,
         simResults: state.simResults,
@@ -410,6 +439,8 @@ export const useAppStore = create<AppState>()(
         ownershipConfig: state.ownershipConfig,
         ownershipOverrides: state.ownershipOverrides,
         ownershipConfigOverrides: state.ownershipConfigOverrides,
+        fieldCompetitors: state.fieldCompetitors,
+        userName: state.userName,
       }),
       migrate: (persisted: unknown, version: number) => {
         const state = persisted as Record<string, unknown>;
@@ -436,6 +467,10 @@ export const useAppStore = create<AppState>()(
           if (!state.ownershipConfigOverrides) {
             state.ownershipConfigOverrides = {};
           }
+        }
+        if (version < 8) {
+          if (!state.fieldCompetitors) state.fieldCompetitors = [];
+          if (!state.userName) state.userName = 'Robert Ray';
         }
         return state;
       },

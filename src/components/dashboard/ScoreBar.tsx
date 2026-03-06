@@ -1,12 +1,22 @@
+import { useMemo } from 'react';
 import { useAppStore } from '../../store';
 import { computeScoreProjection } from '../../engine/ev';
+import { computeCompetitorScores } from '../../engine/field';
 
 export default function ScoreBar() {
   const tournaments = useAppStore((s) => s.tournaments);
   const picks = useAppStore((s) => s.picks);
   const simResults = useAppStore((s) => s.simResults);
+  const fieldCompetitors = useAppStore((s) => s.fieldCompetitors);
 
   const proj = computeScoreProjection(tournaments, picks, simResults);
+
+  const rank = useMemo(() => {
+    if (fieldCompetitors.length === 0) return null;
+    const scores = computeCompetitorScores(fieldCompetitors, tournaments, simResults);
+    const above = scores.filter((s) => s.totalProjected > proj.totalProjected).length;
+    return above + 1;
+  }, [fieldCompetitors, tournaments, simResults, proj.totalProjected]);
   const totalPicks = proj.completedWithPick + proj.remainingPicked;
   const totalConf = Object.keys(tournaments).length;
 
@@ -76,6 +86,20 @@ export default function ScoreBar() {
         <span>Target:</span>
         <span className="font-mono text-yellow-400/70">45-50</span>
       </div>
+
+      {rank != null && (
+        <>
+          <span className="text-gray-700">|</span>
+          <div className="flex items-center gap-1.5">
+            <span>Rank:</span>
+            <span className={`font-mono font-semibold ${
+              rank <= 3 ? 'text-green-400' : rank <= 10 ? 'text-yellow-400' : 'text-gray-200'
+            }`}>
+              {rank}/{fieldCompetitors.length + 1}
+            </span>
+          </div>
+        </>
+      )}
     </div>
   );
 }

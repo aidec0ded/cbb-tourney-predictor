@@ -3,6 +3,7 @@ import Sidebar from './components/dashboard/Sidebar';
 import ScoreBar from './components/dashboard/ScoreBar';
 import TournamentDetail from './components/tournament/TournamentDetail';
 import StrategyDashboard from './components/strategy/StrategyDashboard';
+import FieldDashboard from './components/field/FieldDashboard';
 import ResultsSummary from './components/results/ResultsSummary';
 import SettingsPage from './components/settings/SettingsPage';
 
@@ -15,6 +16,9 @@ export default function App() {
   switch (activeView) {
     case 'strategy':
       mainContent = <StrategyDashboard />;
+      break;
+    case 'field':
+      mainContent = <FieldDashboard />;
       break;
     case 'results':
       mainContent = <ResultsSummary />;
